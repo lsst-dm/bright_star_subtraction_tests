@@ -35,13 +35,16 @@ class YuanyuanTest(object):
         self.q10, self.q90 = None, None
         self.q25, self.q75 = None, None
         self.isAnnular = False
+        self.annularQ = None
         self.allApsFit = None
 
     def addFluxes(self, dataId):
         print(f'Extracting fluxes for sky objects in {dataId}')
         filename = self.butler.get(self.datasetName+'_filename', dataId=dataId)
         if not os.path.exists(filename[0]):
-            print(" > WARNING: you are probably not loading the dataset you think you are loading")
+            print(" > WARNING: you are probably not loading the dataset you think you are loading;"
+                  " > Ignoring dataId.")
+            return
         sources = self.butler.get(self.datasetName, dataId=dataId)
         skyObj = sources[sources[self.skyObjColumnName]]
         photoCalib = self.butler.get(self.photoCalibDatasetName, dataId=dataId).getPhotoCalib()
@@ -81,6 +84,7 @@ class YuanyuanTest(object):
             self._normalizeFluxes(annular=annular)
         self.median = np.nanmedian(self._normalizedFluxes, axis=1)
         if not medianOnly:
+            self.annularQ = annular
             self.q10 = np.nanquantile(self._normalizedFluxes, 0.1, axis=1)
             self.q90 = np.nanquantile(self._normalizedFluxes, 0.9, axis=1)
             self.q25 = np.nanquantile(self._normalizedFluxes, 0.25, axis=1)
@@ -105,8 +109,9 @@ class YuanyuanTest(object):
             oldSize = plt.rcParams['figure.figsize']
             plt.rcParams['figure.figsize'] = 14, 9
         rads = self._getRadii(annular)
-        if self.median is None or annular != self.isAnnular:
-            if plotQ10 or plotQ25 or plotQ75 or plotQ90:
+        plotAnyQ = plotQ10 or plotQ25 or plotQ75 or plotQ90
+        if self.median is None or annular != self.isAnnular or (plotAnyQ and annular != self.annularQ):
+            if plotAnyQ:
                 self.computeQuantiles(annular=annular)
             else:
                 self.computeQuantiles(medianOnly=True, annular=annular)
