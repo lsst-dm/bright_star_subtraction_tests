@@ -6,6 +6,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 import os
 
+from lsst.afw import image as afwImage
+import lsst.afw.display as afwDisplay
 
 class YuanyuanTest(object):
     def __init__(self, apRads,
@@ -72,12 +74,12 @@ class YuanyuanTest(object):
             print("Normalizing fluxes within annular apertures...")
             annAreas = self.areas[1:] - self.areas[:-1]
             annFluxes = np.array(self._fluxes)[1:] - np.array(self._fluxes)[:-1]
-            self.isAnnular=True
-            self._normalizedFluxes = annFluxes/annAreas.reshape(-1,1)
+            self.isAnnular = True
+            self._normalizedFluxes = annFluxes/annAreas.reshape(-1, 1)
         else:
             print("Normalizing fluxes within circular apertures...")
-            self.isAnnular=False
-            self._normalizedFluxes = np.array(self._fluxes)/self.areas.reshape(-1,1)
+            self.isAnnular = False
+            self._normalizedFluxes = np.array(self._fluxes)/self.areas.reshape(-1, 1)
 
     def computeQuantiles(self, medianOnly=False, annular=False):
         if self._normalizedFluxes is None or (annular != self.isAnnular):
@@ -103,7 +105,8 @@ class YuanyuanTest(object):
         self.linearFit = np.polyfit(self._getRadii(annular), self.median, 1)
         return self.linearFit[0]
 
-    def plot(self, annular=False, plotQ10=True, plotQ25=True, plotQ75=True, plotQ90=False, adjustPlotSize=True,
+    def plot(self, annular=False, plotQ10=True, plotQ25=True, plotQ75=True, plotQ90=False,
+             adjustPlotSize=True,
              title='', addProcessingStep=True, show=True, savePath='', **kwargs):
         if adjustPlotSize:
             oldSize = plt.rcParams['figure.figsize']
@@ -163,3 +166,114 @@ class YuanyuanCoaddTest(YuanyuanTest):
                  fluxColumnStub='base_CircularApertureFlux_', dataId=None):
         YuanyuanTest.__init__(self, apRads, 'deepCoadd_meas', 'merge_peak_sky', 'deepCoadd_calexp',
                               removeFlagged, butler, butlerPath, fluxColumnStub, dataId)
+
+
+def plot_func(im, cmap='gist_stern', plotMaskPlane=False, symmetrizeCmap=False,
+              wind=None, innerRadius=None, outerRadius=None, title='',
+              showTicks=False, plotOneArcsecLine=False, OALy=150, OALcolor='darkorchid'):
+    """Utility function to plt.imshow arrays or afw Images."""
+    if type(im) in [afwImage.exposure.ExposureF, afwImage.exposure.ExposureD,
+                    afwImage.exposure.ExposureI, afwImage.maskedImage.MaskedImageF,
+                    afwImage.maskedImage.MaskedImageD, afwImage.maskedImage.MaskedImageI]:
+        if plotMaskPlane:
+            imarr = im.getMask().array
+        else:
+            imarr = im.getImage().array
+    elif type(im) in [afwImage.image.ImageF, afwImage.image.ImageD,
+                      afwImage.image.ImageI]:
+        imarr = im.array
+    elif type(im) == np.ndarray:
+        imarr = im
+    else:
+        raise ValueError("im should be a numpy array or afw ExposureF")
+    if symmetrizeCmap:
+        span = max(np.abs(np.nanmin(imarr)), np.abs(np.nanmax(imarr)))
+        wind = -span, span
+    elif wind is None:
+        wind = None, None
+    plt.imshow(imarr, cmap=cmap, origin='lower', interpolation='Nearest',
+               vmin=wind[0], vmax=wind[1])
+    plt.colorbar()
+    if not showTicks:
+        plt.xticks([])
+        plt.yticks([])
+    if plotOneArcsecLine:
+        dims = imarr.shape
+        center = dims[1]/2
+        plt.plot([center - 352.9/2, center + 352.9/2], [OALy, OALy],
+                 lw=3, c=OALcolor)
+        plt.text(center, OALy + 20, "1'", horizontalalignment='center',
+                 color=OALcolor, fontsize=21)
+    plt.title(title)
+    plt.show()
+    plt.close()
+
+def plotExposure(exp, bg=None, title='', dispScale=None, mt=100, figsize=(8,8),
+            pixCenters=[]):
+    """Display plot of an exposure, and eventual points overlay."""
+    fig = plt.figure(figsize=figsize, dpi=150, facecolor='w', edgecolor='k')
+    display = afwDisplay.getDisplay(backend='matplotlib', frame=fig)
+    if dispScale is None:
+        display.scale("asinh", np.quantile(exp.image.array, 0.2), np.quantile(exp.image.array, 0.8))
+    else:
+        display.scale("asinh", dispScale[0], dispScale[1])
+    display.setMaskTransparency(mt)
+    if bg is None:
+        display.mtv(exp)
+    else:
+        bgexp = exp.clone()
+        calexpIm = bgexp.getMaskedImage()
+        calexpIm -= bg.getImage()
+        display.mtv(bgexp)
+    for j, cen in enumerate(pixCenters):
+        plt.plot(cen[0]+10, cen[1]+10, '.', c='orange', ms=4, alpha=.7)
+        plt.text(cen[0]+10, cen[1]+10, str(j), color='orange')
+    plt.title(title)
+    plt.show()
+    display.close()
+    plt.close()
+
+def replaceMaskedPixels(maskedIm, maskPlane, onMask=False, val=0, inPlace=False, verbose=False):
+    """ Replace all pixels that were flagged with the mask plane `maskPlane` by
+    `val`. If `onMask`, the values are changed on the mask itself; if not, on
+    the image.
+    """
+    mask = maskedIm.mask
+    mpd = mask.getMaskPlaneDict()
+    mpValues = set(list(mask.array.flatten()))
+    bitNb = mpd[maskPlane]
+    badVals = []
+    if verbose:
+        print('MaskPlaneValue\tlen(bin)Binary')
+    for mpv in mpValues:
+        if verbose:
+            if len(str(mpv)) > 2:
+                print(f'MPV {mpv}:\t{len(bin(mpv)[2:])}\t{bin(mpv)[2:]}')
+            else:
+                print(f'MPV {mpv}:\t\t{len(bin(mpv)[2:])}\t{bin(mpv)[2:]}')
+        binPv = bin(mpv)[2:]
+        if len(binPv) >= bitNb + 1:
+            if int(binPv[-(bitNb + 1)]):
+                badVals += [mpv]
+    if not badVals:
+        if verbose:
+            print(f'Mask plane {maskPlane} seems absent from image; returning it unchanged')
+        return maskedIm
+    elif verbose:
+        print(f'Mask values to be changed: {badVals}')
+    if inPlace:
+        newIm = maskedIm
+    else:
+        newIm = maskedIm.clone()
+    if onMask:
+        arr = newIm.mask.array
+    else:
+        arr = newIm.image.array
+    maskArr = maskedIm.mask.array
+    for bv in badVals:
+        arr[maskArr==bv] = val
+    return newIm
+
+
+
+
