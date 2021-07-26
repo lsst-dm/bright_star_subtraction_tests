@@ -13,7 +13,7 @@ class YuanyuanTest(object):
     def __init__(self, apRads,
                  datasetName='src', skyObjColumnName='sky_source', photoCalibDatasetName='calexp',
                  removeFlagged=True, butler=None, butlerPath=None,
-                 fluxColumnStub='base_CircularApertureFlux_', dataId=None):
+                 fluxColumnStub='base_CircularApertureFlux_', dataId=None, gen2=False):
         self.apRads = apRads
         self.datasetName = datasetName
         self.skyObjColumnName = skyObjColumnName
@@ -29,6 +29,7 @@ class YuanyuanTest(object):
         if dataId is not None:
             self.addFluxes(dataId)
         self.areas = np.array([np.pi * (radius**2) for radius in apRads])
+        self.gen2 = gen2
         # Initialize other class variables to None for memory allocation
         self.annFluxe = None
         self.annAreas = None
@@ -40,16 +41,22 @@ class YuanyuanTest(object):
         self.annularQ = None
         self.allApsFit = None
 
-    def addFluxes(self, dataId):
+    def addFluxes(self, dataId, collection=None):
         print(f'Extracting fluxes for sky objects in {dataId}')
-        filename = self.butler.get(self.datasetName+'_filename', dataId=dataId)
-        if not os.path.exists(filename[0]):
-            print(" > WARNING: you are probably not loading the dataset you think you are loading;"
-                  " > Ignoring dataId.")
-            return
-        sources = self.butler.get(self.datasetName, dataId=dataId)
+        if self.gen2:
+            filename = self.butler.get(self.datasetName+'_filename', dataId=dataId)
+            if not os.path.exists(filename[0]):
+                print(" > WARNING: you are probably not loading the dataset you think you are loading;"
+                      " > Ignoring dataId.")
+                return
+            if collection is not None:
+                print("A collection was provided, but this YuanyuanTest was ran with gen2=True. Ignoring it.")
+            sources = self.butler.get(self.datasetName, dataId=dataId)
+            photoCalib = self.butler.get(self.photoCalibDatasetName, dataId=dataId).getPhotoCalib()
+        else:
+            sources = self.butler.get(self.datasetName, dataId=dataId, collections=collection)
+            photoCalib = self.butler.get(self.photoCalibDatasetName, dataId=dataId, collections=collection).getPhotoCalib()
         skyObj = sources[sources[self.skyObjColumnName]]
-        photoCalib = self.butler.get(self.photoCalibDatasetName, dataId=dataId).getPhotoCalib()
         for j, radius in enumerate(self.apRads):
             instFluxes = np.copy(skyObj[self.fluxColumnStub + f'{radius}_0_instFlux'])
             if self.removeFlagged:
@@ -156,16 +163,16 @@ class YuanyuanTest(object):
 
 class YuanyuanVisitTest(YuanyuanTest):
     def __init__(self, apRads, removeFlagged=True, butler=None, butlerPath=None,
-                 fluxColumnStub='base_CircularApertureFlux_', dataId=None):
+                 fluxColumnStub='base_CircularApertureFlux_', dataId=None, gen2=False):
         YuanyuanTest.__init__(self, apRads, 'src', 'sky_source', 'calexp',
-                              removeFlagged, butler, butlerPath, fluxColumnStub, dataId)
+                              removeFlagged, butler, butlerPath, fluxColumnStub, dataId, gen2)
 
 
 class YuanyuanCoaddTest(YuanyuanTest):
     def __init__(self, apRads, removeFlagged=True, butler=None, butlerPath=None,
-                 fluxColumnStub='base_CircularApertureFlux_', dataId=None):
+                 fluxColumnStub='base_CircularApertureFlux_', dataId=None, gen2=False):
         YuanyuanTest.__init__(self, apRads, 'deepCoadd_meas', 'merge_peak_sky', 'deepCoadd_calexp',
-                              removeFlagged, butler, butlerPath, fluxColumnStub, dataId)
+                              removeFlagged, butler, butlerPath, fluxColumnStub, dataId, gen2=gen2)
 
 
 def plot_func(im, cmap='gist_stern', plotMaskPlane=False, symmetrizeCmap=False,
@@ -209,7 +216,7 @@ def plot_func(im, cmap='gist_stern', plotMaskPlane=False, symmetrizeCmap=False,
     plt.close()
 
 def plotExposure(exp, bg=None, title='', dispScale=None, mt=100, figsize=(8,8),
-            pixCenters=[]):
+                 pixCenters=[], pixText=None):
     """Display plot of an exposure, and eventual points overlay."""
     fig = plt.figure(figsize=figsize, dpi=150, facecolor='w', edgecolor='k')
     display = afwDisplay.getDisplay(backend='matplotlib', frame=fig)
@@ -225,9 +232,11 @@ def plotExposure(exp, bg=None, title='', dispScale=None, mt=100, figsize=(8,8),
         calexpIm = bgexp.getMaskedImage()
         calexpIm -= bg.getImage()
         display.mtv(bgexp)
+    if len(pixCenters) and pixText is None:
+        pixText = list(range(len(pixCenters)))
     for j, cen in enumerate(pixCenters):
-        plt.plot(cen[0]+10, cen[1]+10, '.', c='orange', ms=4, alpha=.7)
-        plt.text(cen[0]+10, cen[1]+10, str(j), color='orange')
+        plt.plot(cen[0], cen[1], '.', c='orange', ms=4, alpha=.7)
+        plt.text(cen[0]+10, cen[1]+10, str(pixText[j]), color='orange')
     plt.title(title)
     plt.show()
     display.close()
@@ -273,7 +282,4 @@ def replaceMaskedPixels(maskedIm, maskPlane, onMask=False, val=0, inPlace=False,
     for bv in badVals:
         arr[maskArr==bv] = val
     return newIm
-
-
-
 
