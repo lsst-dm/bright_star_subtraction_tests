@@ -10,20 +10,16 @@ from lsst.afw import image as afwImage
 import lsst.afw.display as afwDisplay
 
 class YuanyuanTest(object):
-    def __init__(self, apRads,
+    def __init__(self, apRads, butler,
                  datasetName='src', skyObjColumnName='sky_source', photoCalibDatasetName='calexp',
-                 removeFlagged=True, butler=None, butlerPath=None,
+                 removeFlagged=True,
                  fluxColumnStub='base_CircularApertureFlux_', dataId=None, gen2=False):
         self.apRads = apRads
         self.datasetName = datasetName
         self.skyObjColumnName = skyObjColumnName
         self.photoCalibDatasetName = photoCalibDatasetName
         self.removeFlagged = removeFlagged
-        if butler is not None:
-            self.butler = butler
-        elif butlerPath is None:
-            raise TypeError("Either a butler instance, or a path to a repo where one should be initialized,"
-                            "must be passed at initialization.")
+        self.butler = butler
         self.fluxColumnStub = fluxColumnStub
         self._fluxes = [[] for _ in range(len(apRads))]
         if dataId is not None:
@@ -162,17 +158,79 @@ class YuanyuanTest(object):
 
 
 class YuanyuanVisitTest(YuanyuanTest):
-    def __init__(self, apRads, removeFlagged=True, butler=None, butlerPath=None,
+    def __init__(self, apRads, removeFlagged=True, butler=None,
                  fluxColumnStub='base_CircularApertureFlux_', dataId=None, gen2=False):
-        YuanyuanTest.__init__(self, apRads, 'src', 'sky_source', 'calexp',
-                              removeFlagged, butler, butlerPath, fluxColumnStub, dataId, gen2)
+        YuanyuanTest.__init__(self, apRads, butler, 'src', 'sky_source', 'calexp',
+                              removeFlagged, fluxColumnStub, dataId, gen2)
 
 
 class YuanyuanCoaddTest(YuanyuanTest):
-    def __init__(self, apRads, removeFlagged=True, butler=None, butlerPath=None,
+    def __init__(self, apRads, removeFlagged=True, butler=None,
                  fluxColumnStub='base_CircularApertureFlux_', dataId=None, gen2=False):
-        YuanyuanTest.__init__(self, apRads, 'deepCoadd_meas', 'merge_peak_sky', 'deepCoadd_calexp',
-                              removeFlagged, butler, butlerPath, fluxColumnStub, dataId, gen2=gen2)
+        YuanyuanTest.__init__(self, apRads, butler, 'deepCoadd_meas', 'merge_peak_sky', 'deepCoadd_calexp',
+                              removeFlagged, fluxColumnStub, dataId, gen2=gen2)
+
+
+def countInAnnulus(src, brightCen, radiiPix, x_name="base_SdssCentroid_x",
+                   y_name="base_SdssCentroid_y"):
+    radMaxPix = radiiPix[-1]
+    # only consider detections within a square of width 2 outer radii
+    withinSquare = ((src[x_name] >= brightCen[0]-radMaxPix) &
+                    (src[x_name] < brightCen[0]+radMaxPix) &
+                    (src[y_name] >= brightCen[1]-radMaxPix) &
+                    (src[y_name] < brightCen[1]+radMaxPix))
+    insideCents = np.array([obj.getCentroid() for obj in src[withinSquare]])
+    if np.all(insideCents == False):
+        return None, None
+    # compute distance to bright object for all candidates
+    dist = np.sqrt(np.sum((insideCents - brightCen)**2, axis=1))
+    counts = []
+    areas = []
+    for radIn,radOut in zip(radiiPix,radiiPix[1:]):
+        # count those within annulus
+        inAnnulus = (dist >= radIn) & (dist < radOut)
+        counts += [np.sum(inAnnulus)]
+        areas += [np.pi *(radOut**2 - radIn**2)]
+    return counts, areas
+
+class MasqueradeTest(object):
+    """WORK IN PROGRESS
+    A class to compute the quantities required to produce the "masquerade"
+    diagnostics and associated plot and metrics.
+
+    The masquerade diagnostics amount to looking at the number of
+    detections in annuli of increasing radius around a bright star. The
+    name originates from "mask radius", as this diagnostic was used to
+    select the radius of bright star masks in an older HSC processing
+    set-up (see Coupon et al., 2014).
+
+    Parameters
+    ----------
+    annSize : `float`
+        Radius of each consecutive annulus, in arcsec
+    radMax : `float`
+        Outer radius for the largest annulus, in arcsec
+    pixelScale : `float`
+        Pixel scale of the instrument
+    """
+    def __init__(self, annSize=2.5, radMax=150,
+                 magBins=[12, 14],
+                 datasetName='deepCoadd_meas',
+                 butler=None,
+                 dataId=None):
+        self.annSize = annSize
+        self.radMax = radMax
+        self.butler = butler
+        # compute annulus-related quantities
+        self.annRadii = np.arange(0, radMax, annSize)
+        self.annAreas = np.array([np.pi *(radOut**2 - radIn**2) for
+                                  radIn, radOut in zip(self.annRadii, self.annRadii[1:])])
+        self._fluxes = [[] for _ in range(len(apRads))]
+        if dataId is not None:
+            self.addFluxes(dataId)
+        self.areas = np.array([np.pi * (radius**2) for radius in apRads])
+
+        # Initialize other class variables to None for memory allocation
 
 
 def plot_func(im, cmap='gist_stern', plotMaskPlane=False, symmetrizeCmap=False,
